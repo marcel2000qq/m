@@ -585,7 +585,7 @@
       }
       .photo-gallery img {
         max-height: 150px;
-        flex: 0 0 calc(50% - 0.25rem); /* Two images per row with a small gap */
+        flex: 0 0 calc(50% - 0.25rem);
       }
       .calendar-container { max-width: 100%; margin: 0 auto; }
       #calendar {
@@ -604,7 +604,6 @@
       .dock { display: none; }
     }
 
-    /* Modern required field indicator with asterisk on the right */
     .required-field {
       position: relative;
     }
@@ -765,6 +764,9 @@
       emailjs.init('-z0ERPDerhRbWVICK');
       console.log('EmailJS inițializat');
 
+      // Google Apps Script Web App URL
+      const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxFXFOwzDe98tUSzSdlg4mmJJjnQK9O0HdDXR1sst05jK4sfCqY2NnjxI7rNI4YJI3nqw/exec'; // Înlocuiește cu URL-ul Web App generat
+
       document.querySelectorAll('a[href^="#"]').forEach(anchor => {
         anchor.addEventListener('click', function (e) {
           e.preventDefault();
@@ -775,7 +777,7 @@
         });
       });
 
-      // Inițializare calendar la încărcarea paginii
+      // Inițializare calendar
       let calendar = new FullCalendar.Calendar(document.getElementById('calendar-container'), {
         initialView: 'dayGridMonth',
         locale: 'ro',
@@ -788,6 +790,7 @@
         height: 'auto',
         contentHeight: 120,
         dayMaxEvents: true,
+        events: [],
         dateClick: function(info) {
           const formattedDate = moment(info.dateStr).format('D MMMM YYYY');
           document.getElementById('booking-date').value = formattedDate;
@@ -803,7 +806,7 @@
       });
       calendar.render();
 
-      // Deschiderea calendarului la prima apăsare pe input
+      // Deschiderea/închiderea calendarului
       const bookingDateInput = document.getElementById('booking-date');
       const calendarContainer = document.getElementById('calendar-container');
       let isCalendarVisible = false;
@@ -821,7 +824,6 @@
         }
       });
 
-      // Ascundere calendar la clic în afara input-ului
       document.addEventListener('click', function(e) {
         if (!bookingDateInput.contains(e.target) && !calendarContainer.contains(e.target)) {
           calendarContainer.style.display = 'none';
@@ -829,8 +831,36 @@
         }
       });
 
+      // Încarcă rezervările din Google Sheets prin Google Apps Script
+      async function loadBookings() {
+        try {
+          const response = await fetch(WEB_APP_URL, { method: 'GET' });
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`Eroare la încărcare: ${JSON.stringify(errorData)}`);
+          }
+          const data = await response.json();
+          const bookings = data.values || [];
+          const events = bookings.map(row => ({
+            title: `${row[3] || 'Fără tip'} - ${row[0] || 'Fără nume'}`,
+            start: row[4],
+            allDay: true,
+            color: '#ff6b6b'
+          }));
+          calendar.getEvents().forEach(event => event.remove());
+          events.forEach(event => calendar.addEvent(event));
+          console.log('Rezervările au fost încărcate cu succes:', bookings);
+        } catch (error) {
+          console.error('Eroare la încărcarea rezervărilor:', error);
+          alert('Eroare la încărcarea rezervărilor: ' + error.message);
+        }
+      }
+
+      loadBookings();
+
+      // Gestionarea formularului
       const form = document.querySelector('.booking-form');
-      form.addEventListener('submit', function(e) {
+      form.addEventListener('submit', async function(e) {
         e.preventDefault();
         console.log('Eveniment submit declanșat');
 
@@ -842,30 +872,38 @@
         const eventType = form.querySelector('#event_type').value || 'Fără tip';
         const details = form.querySelector('#details').value.trim() || 'Fără detalii';
 
-        if (!phone || !displayDate) {
-          console.log('Avertisment: Câmpuri obligatorii lipsă:', {
-            phone: !phone,
-            date: !displayDate
-          });
+        if (!phone || displayDate === 'Nu a fost selectată') {
+          console.log('Avertisment: Câmpuri obligatorii lipsă:', { phone: !phone, date: !displayDate });
           alert('Câmpurile obligatorii (Număr de telefon și Data selectată) trebuie completate.');
           return;
         }
 
-        console.log('Date colectate:', {
-          name: name,
-          email: email,
-          phone: phone,
-          event_type: eventType,
-          date: dateForEmail,
-          display_date: displayDate,
-          details: details
-        });
+        console.log('Date colectate:', { name, email, phone, eventType, date: dateForEmail, display_date: displayDate, details });
 
         if (eventType === 'Fără tip') {
           console.log('Avertisment: Tipul evenimentului nu a fost selectat');
           alert('Te rugăm să selectezi un tip de eveniment. Cererea va fi trimisă cu valoarea implicită "Fără tip".');
         }
 
+        // Salvează rezervarea în Google Sheets prin Google Apps Script
+        try {
+          const response = await fetch(WEB_APP_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ values: [[name, email, phone, eventType, dateForEmail, details]] })
+          });
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(`Eroare API: ${JSON.stringify(errorData)}`);
+          }
+          console.log('Rezervare salvată în Google Sheets');
+        } catch (error) {
+          console.error('Eroare detaliată:', error);
+          alert('Eroare la salvarea rezervării: ' + error.message);
+          return;
+        }
+
+        // Trimite email-ul
         console.log('Trimitere cerere către EmailJS...');
         emailjs.send('service_6ahst7p', 'template_nmkchnq', {
           name: name,
@@ -875,21 +913,15 @@
           date: dateForEmail,
           details: details
         }).then(function(response) {
-          console.log('Cerere trimisă cu succes!', {
-            status: response.status,
-            text: response.text
-          });
+          console.log('Cerere trimisă cu succes!', { status: response.status, text: response.text });
           alert('Cererea a fost trimisă! Vei fi contactat în curând.');
           form.reset();
           calendar.getEvents().forEach(event => event.remove());
           calendarContainer.style.display = 'none';
           isCalendarVisible = false;
+          loadBookings();
         }, function(error) {
-          console.error('Eroare la trimiterea cererii:', {
-            status: error.status,
-            text: error.text,
-            message: error
-          });
+          console.error('Eroare la trimiterea cererii:', { status: error.status, text: error.text, message: error });
           alert('Eroare la trimiterea cererii: ' + JSON.stringify(error));
         });
       });
@@ -916,19 +948,17 @@
           alert('Numărul de telefon trebuie să fie în formatul +40712 345 678.');
           return false;
         }
-        form.submit();
         return true;
       }
 
-      // Funcție pentru inițializarea caruselului infinit
+      // Inițializarea caruselului infinit
       function initializeInfiniteCarousel(trackSelector, cardSelector, speed) {
         const track = document.querySelector(trackSelector);
         const container = track.parentElement;
         const cards = Array.from(document.querySelectorAll(cardSelector));
         const cardCount = cards.length;
 
-        // Duplicăm cardurile de mai multe ori pentru a asigura continuitatea
-        for (let i = 0; i < 3; i++) { // Trei duplicări pentru a reduce frecvența resetării
+        for (let i = 0; i < 3; i++) {
           cards.forEach(card => {
             const clone = card.cloneNode(true);
             track.appendChild(clone);
@@ -940,21 +970,17 @@
         let isPaused = false;
         let lastResetTime = performance.now();
 
-        // Calculăm lățimea unui card (inclusiv marginile)
         const cardWidth = updatedCards[0].offsetWidth + parseFloat(getComputedStyle(updatedCards[0]).marginRight) + parseFloat(getComputedStyle(updatedCards[0]).marginLeft);
         const totalWidth = cardWidth * cardCount;
 
         function scrollCarousel(currentTime) {
           if (!isPaused) {
-            scrollPosition += speed; // Viteza de scroll (pozitiv pentru stânga, negativ pentru dreapta)
-
-            // Verificăm dacă au trecut 5 minute (300,000 ms) de la ultima resetare
-            if (currentTime - lastResetTime >= 300000 || scrollPosition >= totalWidth * 3) { // *3 pentru a include toate duplicările
+            scrollPosition += speed;
+            if (currentTime - lastResetTime >= 300000 || scrollPosition >= totalWidth * 3) {
               scrollPosition = 0;
               lastResetTime = currentTime;
               track.style.transition = 'none';
               track.style.transform = `translateX(-${scrollPosition}px)`;
-              // Forțăm reflow pentru a elimina tranziția
               void track.offsetWidth;
               track.style.transition = 'transform 0.5s linear';
             } else {
@@ -964,10 +990,8 @@
           requestAnimationFrame(scrollCarousel);
         }
 
-        // Pornim animația
         requestAnimationFrame(scrollCarousel);
 
-        // Pauzăm la hover
         container.addEventListener('mouseenter', () => {
           isPaused = true;
         });
@@ -977,10 +1001,9 @@
         });
       }
 
-      // Inițializăm caruselele cu viteze diferite
-      initializeInfiniteCarousel('.type-track', '.type-card', 1); // 1px per cadru
-      initializeInfiniteCarousel('.service-track', '.service-card', 1.5); // 1.5px per cadru
-      initializeInfiniteCarousel('.review-track', '.review-card', 0.8); // 0.8px per cadru
+      initializeInfiniteCarousel('.type-track', '.type-card', 1);
+      initializeInfiniteCarousel('.service-track', '.service-card', 1.5);
+      initializeInfiniteCarousel('.review-track', '.review-card', 0.8);
 
       const translations = {
         ro: {
